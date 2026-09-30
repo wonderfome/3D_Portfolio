@@ -39,6 +39,21 @@
   .row.err .nm { color:#e06c75; }
   #foot { border-top:1px solid var(--line); padding:10px 16px; color:var(--dim); font-size:11.5px; }
   ::-webkit-scrollbar { width:9px } ::-webkit-scrollbar-thumb { background:#333a46; border-radius:9px }
+
+  /* ---------- ป๊อปอัพเว็บในหน้า (คลิก Cube.011) ---------- */
+  #cvwrap { position:absolute; inset:0; display:none; z-index:20; pointer-events:none; }
+  #cvwrap.on { display:block; }
+  #cvpop { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:min(880px, 82vw); height:82vh; display:flex; flex-direction:column;
+    background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    box-shadow:0 24px 70px rgba(0,0,0,.62); overflow:hidden; pointer-events:auto; }
+  #cvhead { display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:8px 10px 8px 14px; border-bottom:1px solid var(--line); font-size:12.5px; color:var(--dim); }
+  #cvhead button { padding:2px 9px; line-height:1.4; }
+  #cvframe { flex:1; width:100%; border:0; background:#fff; }
+  #cvfoot { padding:7px 12px; border-top:1px solid var(--line); font-size:11.5px; }
+  #cvfoot a { color:var(--acc); text-decoration:none; }
+  #cvfoot a:hover { text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -46,6 +61,13 @@
   <div id="view">
     <div id="bar"><i></i></div>
     <div id="hud"></div>
+    <div id="cvwrap">
+      <div id="cvpop">
+        <div id="cvhead"><span>CV — Fome</span><button id="cvx" title="ปิด">✕</button></div>
+        <iframe id="cvframe" title="CV"></iframe>
+        <div id="cvfoot"><a id="cvfull" href="https://wonderfome.github.io/CV_Fome/" target="_blank" rel="noopener">เปิดเต็มแท็บ ↗</a></div>
+      </div>
+    </div>
     <div id="side">
       <h1>FOME 3D Viewer</h1>
       <div class="sub" id="sub">กำลังโหลด…</div>
@@ -81,7 +103,7 @@ const FILES = [
   'Cube.018','Cube.021','Cube.022','Cube.024',
   'Cylinder','Cylinder.001','Cylinder.002','Cylinder.003','Cylinder.005',
   'Icosphere','Icosphere.001','Icosphere.002','Icosphere.003','Icosphere.004','Icosphere.005','Icosphere.006',
-  'Text','Text.001','Text.002','Text.003','Text.004','Text.005'
+  'Text','Text.001','Text.002','Text.003','Text.004','Text.005','Text.006'
 ];
 
 // texture override : ชื่อโมเดล -> ไฟล์รูป
@@ -101,6 +123,29 @@ const CAM_VIEWS = {
   'Cube.022': PHOTO_VIEW,     // เรือนยอด
   'Text.005': PHOTO_VIEW      // ป้ายชื่อต้นไม้
 };
+
+// คลิก object ในฉากแล้วเปิดเว็บเป็นป๊อปอัพทับบนฉาก : ชื่อโมเดล -> URL
+const LINK_URLS = { 'Text.006': 'https://wonderfome.github.io/CV_Fome/' };
+
+// ---------- ป๊อปอัพเว็บ ----------
+const cvWrap = document.getElementById('cvwrap');
+const cvFrame = document.getElementById('cvframe');
+const cvFull = document.getElementById('cvfull');
+
+function openCvPop(url) {
+  cvFull.href = url;
+  if (cvFrame.getAttribute('src') !== url) cvFrame.setAttribute('src', url);
+  cvWrap.classList.add('on');
+}
+function closeCvPop() {
+  cvWrap.classList.remove('on');
+  cvFrame.setAttribute('src', 'about:blank');      // หยุดเสียง/วิดีโอข้างใน
+}
+document.getElementById('cvx').addEventListener('click', closeCvPop);
+
+// โยกต้นไม้ : ชื่อขึ้นต้นด้วย Icosphere (เรือนยอดทั้ง 7 ชิ้น) — ซ้าย-ขวาเบา ๆ ตามแกน Z
+// ampRatio = ระยะโยกข้างละ เทียบเป็นสัดส่วนของความกว้างเรือนยอด
+const SWAY = { match: /^Icosphere/, ampRatio: 0.15, speed: 1.1 };
 
 const view = document.getElementById('view');
 const listEl = document.getElementById('list');
@@ -186,6 +231,7 @@ function addEntry(name, src) {
 }
 
 function select(rec) {
+  closeCvPop();                                    // เลือกอย่างอื่น = ปิดป๊อปอัพเว็บ
   models.forEach(m => m.row.classList.toggle('on', m === rec));
   selected = rec && rec.ok ? rec : null;
   if (selected) {
@@ -317,6 +363,11 @@ function onLoad(rec, gltf) {
   root.add(obj);
   rec.obj = obj;
   rec.ok = true;
+  if (SWAY.match.test(rec.name)) {                  // เตรียมโยกให้แต่ละต้นไม่ซ้ำจังหวะกัน
+    const size = new THREE.Box3().setFromObject(obj).getSize(new THREE.Vector3());
+    rec.sway = { bx: obj.position.x, amp: size.x * SWAY.ampRatio,
+                 phase: models.length * 2.39, rate: 0.9 + (models.length % 5) * 0.05 };
+  }
 
   let tris = 0;
   obj.traverse(o => {
@@ -417,10 +468,14 @@ renderer.domElement.addEventListener('pointerup', e => {
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
   const hits = ray.intersectObjects(root.children, true);
-  if (!hits.length) return select(null);
+  if (!hits.length) return select(null);             // คลิกที่ว่าง = ล้างเลือก + ปิดป๊อปอัพ
   const o = hits[0].object;
   const rec = models.find(m => m.obj && (o === m.obj || m.obj.getObjectById(o.id)));
-  if (rec) select(rec);
+  if (rec) {
+    select(rec);                                     // ไฮไลต์ object เหมือนคลิกตัวอื่น
+    const url = LINK_URLS[rec.name];
+    if (url) openCvPop(url);                         // เปิดเว็บเป็นป๊อปอัพทับบนฉาก
+  }
 });
 
 // ---------- toolbar ----------
@@ -448,7 +503,7 @@ document.getElementById('add').onchange = (e) => {
 addEventListener('keydown', e => {
   if (e.key === 'f' || e.key === 'F') { select(null); frame(); }
   if (e.key === 'w' || e.key === 'W') setWire(!wireframe);
-  if (e.key === 'Escape') select(null);
+  if (e.key === 'Escape') { closeCvPop(); select(null); }   // ปิดป๊อปอัพ + ล้างการเลือก
   if (e.key === 'c' || e.key === 'C')                      // พิมพ์มุมกล้องปัจจุบันมาแปะใน CAM_VIEWS
     console.log('CAM ' + JSON.stringify({
       target: controls.target.toArray().map(n => +n.toFixed(3)),
@@ -474,6 +529,11 @@ renderer.setAnimationLoop(() => {
     camera.position.lerpVectors(camAnim.fromPos, camAnim.toPos, e);
     controls.target.lerpVectors(camAnim.fromTgt, camAnim.toTgt, e);
     if (k >= 1) camAnim = null;
+  }
+  const st = performance.now() / 1000;             // โยกซ้าย-ขวาเบา ๆ (ลำต้นนิ่ง)
+  for (const m of models) {
+    if (!m.sway || !m.obj) continue;
+    m.obj.position.x = m.sway.bx + m.sway.amp * Math.sin(st * SWAY.speed * m.sway.rate + m.sway.phase);
   }
   controls.update();
   renderer.render(scene, camera);
